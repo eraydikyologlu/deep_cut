@@ -2,6 +2,118 @@ import cv2
 import numpy as np
 import os
 
+template_groups = [
+    
+    {
+        'templates': [
+            os.path.join(os.path.dirname(__file__), "templates", "ornek.png"),
+            os.path.join(os.path.dirname(__file__), "templates", "ornektemplate.png"),
+            os.path.join(os.path.dirname(__file__), "templates", "yesilornek.png"),
+            os.path.join(os.path.dirname(__file__), "templates", "yesilornek2.png"),
+            os.path.join(os.path.dirname(__file__), "templates", "yesilornektext.png")
+        ],
+        'threshold': 0.5
+    },
+    {
+        'templates': [
+            os.path.join(os.path.dirname(__file__), "templates", "osymtipiornek.png"),
+            os.path.join(os.path.dirname(__file__), "templates", "sariornek.png"),
+            os.path.join(os.path.dirname(__file__), "templates", "osymtipiornek2.png"),
+            os.path.join(os.path.dirname(__file__), "templates", "osymtipiornek3.png"),
+            os.path.join(os.path.dirname(__file__), "templates", "osymtipiornek4.png"),
+            os.path.join(os.path.dirname(__file__), "templates", "sariornek2.png")
+        ],
+        'threshold': 0.5
+    },
+    {
+        'templates': [
+            os.path.join(os.path.dirname(__file__), "templates", "template1.png"),
+            os.path.join(os.path.dirname(__file__), "templates", "template2.png"),
+            os.path.join(os.path.dirname(__file__), "templates", "template3.png"),
+            os.path.join(os.path.dirname(__file__), "templates", "template4.png"),
+            os.path.join(os.path.dirname(__file__), "templates", "template5.png"),
+            os.path.join(os.path.dirname(__file__), "templates", "template6.png"),
+            os.path.join(os.path.dirname(__file__), "templates", "izgarasilinmeyen.png"),
+        ],
+        'threshold': 0.5
+    }
+]
+
+def template_matching_with_confidence(image):
+    """
+    Birden fazla şablon grubu için Template Matching işlemi yapar ve eşleşmeleri işaretler.
+    """
+    # Hem gri hem renkli görüntüde eşleştirme yapalım
+    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    
+    # Yeşil renk aralığı için maske
+    hsv = cv2.cvtColor(image[:,:,:3], cv2.COLOR_BGR2HSV)
+    lower_green = np.array([40, 40, 40])
+    upper_green = np.array([80, 255, 255])
+    green_mask = cv2.inRange(hsv, lower_green, upper_green)
+
+    # Eşleşme noktalarını takip etmek için maske
+    match_mask = np.zeros(image.shape[:2], dtype=np.uint8)
+
+    for group in template_groups:
+        templates = group['templates']
+        threshold = group['threshold']
+
+        for template_path in templates:
+            if not os.path.exists(template_path):
+                continue
+
+            template_color = cv2.imread(template_path)
+            if template_color is None:
+                continue
+                
+            template_gray = cv2.cvtColor(template_color, cv2.COLOR_BGR2GRAY)
+            
+            # Template'in non-zero piksellerinin maskesini oluştur
+            _, template_mask = cv2.threshold(template_gray, 250, 255, cv2.THRESH_BINARY_INV)
+            
+            # Yeşil şablonlar için HSV kontrolü
+            if "yesilornek" in template_path.lower():
+                template_hsv = cv2.cvtColor(template_color, cv2.COLOR_BGR2HSV)
+                template_green_mask = cv2.inRange(template_hsv, lower_green, upper_green)
+                
+                try:
+                    result_green = cv2.matchTemplate(green_mask, template_green_mask, cv2.TM_CCOEFF_NORMED)
+                    loc_green = np.where(result_green >= threshold)
+                    
+                    for pt in zip(*loc_green[::-1]):
+                        h, w = template_color.shape[:2]
+                        
+                        # Template maskesini görüntü üzerine yerleştir
+                        roi = match_mask[pt[1]:pt[1]+h, pt[0]:pt[0]+w]
+                        if roi.shape == template_mask.shape:
+                            # Sadece template'in non-zero piksellerini işaretle
+                            roi[template_mask > 0] = 255
+                except cv2.error:
+                    continue
+
+            # Normal gri seviye template matching
+            try:
+                result_gray = cv2.matchTemplate(gray_image, template_gray, cv2.TM_CCOEFF_NORMED)
+                loc_gray = np.where(result_gray >= threshold)
+
+                for pt in zip(*loc_gray[::-1]):
+                    h, w = template_gray.shape[:2]
+                    
+                    # Template maskesini görüntü üzerine yerleştir
+                    roi = match_mask[pt[1]:pt[1]+h, pt[0]:pt[0]+w]
+                    if roi.shape == template_mask.shape:
+                        # Sadece template'in non-zero piksellerini işaretle
+                        roi[template_mask > 0] = 255
+            except cv2.error:
+                continue
+
+    # Eşleşme maskesini kullanarak görüntüyü güncelle
+    # Maskedeki beyaz alanları görüntüde beyaza boyayalım
+    image[match_mask == 255] = [255, 255, 255, 255]
+
+    return image
+
 def remove_near_white_pixels(image):
     if image.shape[2] == 3:  # RGB
         b, g, r = cv2.split(image)
@@ -169,6 +281,15 @@ def process_image(image_path):
 
     # İşlenecek görüntü için kopya oluştur
     processed_image = original_image.copy()
+    
+    # BGRA formatına dönüştür
+    if processed_image.shape[2] == 3:  # RGB ise
+        b, g, r = cv2.split(processed_image)
+        alpha = np.ones(b.shape, dtype=np.uint8) * 255
+        processed_image = cv2.merge((b, g, r, alpha))
+    
+    # Template matching uygula
+    processed_image = template_matching_with_confidence(processed_image)
 
     # Adım 1: Beyaza yakın pikselleri kaldır
     processed_image = remove_near_white_pixels(processed_image)
@@ -212,7 +333,7 @@ def process_all_png_in_folder(input_folder):
 
 
 # Klasör yolu
-input_folder = "C://Users//impark//Desktop//impark//deepcut//test//soru_kes_testler//lise-destek"
+input_folder = r"C:\Users\Eray\Downloads\soru_kes_testler\soru_kes_testler\lise-destek"
 for alt_öge in os.listdir(input_folder):
     alt_oge_yolu = os.path.join(input_folder, alt_öge)
     if os.path.isdir(alt_oge_yolu):  # Eğer bu bir klasörse
